@@ -1,0 +1,213 @@
+warning: in the working copy of 'litert/vendors/intel_openvino/compiler/CMakeLists.txt', LF will be replaced by CRLF the next time Git touches it
+diff --git a/litert/CMakeLists.txt b/litert/CMakeLists.txt
+index 78cc345b9..11e81d8bf 100644
+--- a/litert/CMakeLists.txt
++++ b/litert/CMakeLists.txt
+@@ -37,13 +37,20 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+ 
+ # Suppress deprecation warnings (matching Bazel build behavior in .bazelrc)
+ # The codebase has deprecated Error constructors that are still in use
+-add_compile_options(
+-  -Wno-deprecated-declarations
+-  -Wno-nullability-completeness
+-  -Wno-return-type
+-  -fpermissive
+-)
++if(NOT MSVC)
++  add_compile_options(
++    -Wno-deprecated-declarations
++    -Wno-nullability-completeness
++    -Wno-return-type
++    -fpermissive
++  )
++endif()
+ add_compile_definitions(CL_TARGET_OPENCL_VERSION=300)
++if(MSVC)
++  # windows.h's min/max macros break FlatBuffers-generated accessors named
++  # min()/max() (e.g. tflite schema_generated.h) unless disabled globally.
++  add_compile_definitions(NOMINMAX)
++endif()
+ 
+ # Cmake flattens the transitive public and interface link to emit the final link
+ # command. Which will trigger a warning on Apple platforms (ld64 still dedups
+diff --git a/litert/core/CMakeLists.txt b/litert/core/CMakeLists.txt
+index b187ee383..89cb95a03 100644
+--- a/litert/core/CMakeLists.txt
++++ b/litert/core/CMakeLists.txt
+@@ -57,7 +57,10 @@ target_link_libraries(litert_core
+ )
+ 
+ # Platform-specific source exclusions
+-if(NOT WIN32)
++if(WIN32)
++    # Exclude POSIX (dlfcn.h) source
++    set_source_files_properties(dynamic_loading.cc PROPERTIES HEADER_FILE_ONLY TRUE)
++else()
+     # Exclude Windows-specific source
+     set_source_files_properties(dynamic_loading_windows.cc PROPERTIES HEADER_FILE_ONLY TRUE)
+ endif()
+diff --git a/litert/vendors/CMakeLists.txt b/litert/vendors/CMakeLists.txt
+index f4446ed3a..d68a6c519 100644
+--- a/litert/vendors/CMakeLists.txt
++++ b/litert/vendors/CMakeLists.txt
+@@ -243,6 +243,13 @@ function(_litert_add_dispatch_so VENDOR DIR OUTPUT_BASENAME)
+     )
+   endif()
+ 
++  if(VENDOR STREQUAL "OpenVINO")
++    list(APPEND DISPATCH_SRCS
++      "${CMAKE_CURRENT_SOURCE_DIR}/intel_openvino/dispatch/openvino_shared_core.cc"
++      "${CMAKE_CURRENT_SOURCE_DIR}/intel_openvino/dispatch/openvino_tensor_buffer.cc"
++    )
++  endif()
++
+   set(TGT "dispatch_api_${VENDOR}_so")
+   add_library(${TGT} SHARED ${DISPATCH_SRCS})
+   if(VENDOR STREQUAL "MediaTek")
+@@ -311,11 +318,13 @@ else()
+   message(STATUS "Skipping MediaTek dispatch: neuron/api/NeuronAdapter.h not found")
+ endif()
+ # Intel OpenVINO
+-check_include_file_cxx("openvino/openvino.hpp" HAVE_OPENVINO_HDR)
+-if(HAVE_OPENVINO_HDR)
++find_package(OpenVINO QUIET)
++if(TARGET openvino::runtime)
+   _litert_add_dispatch_so(OpenVINO "intel_openvino/dispatch" "OpenVINO")
++  target_link_libraries(dispatch_api_OpenVINO_so PRIVATE openvino::runtime)
++  add_subdirectory(intel_openvino/compiler)
+ else()
+-  message(STATUS "Skipping OpenVINO dispatch: openvino/openvino.hpp not found")
++  message(STATUS "Skipping OpenVINO dispatch: OpenVINO runtime package not found")
+ endif()
+ 
+ # Qualcomm
+diff --git a/litert/vendors/c/litert_dispatch_api.h b/litert/vendors/c/litert_dispatch_api.h
+index 32ac04979..7d8a3e67d 100644
+--- a/litert/vendors/c/litert_dispatch_api.h
++++ b/litert/vendors/c/litert_dispatch_api.h
+@@ -292,6 +292,12 @@ typedef struct LiteRtDispatchGraphInterface {
+ ///
+ /// @note This concrete type is shared between the runtime and the Dispatch
+ ///     plugin, so it must be ABI stable.
++#ifdef interface
++// <windows.h> (pulled in transitively on Windows, e.g. for LoadLibrary) does
++// `#define interface struct` for COM authoring, which collides with the
++// `interface` field name below.
++#undef interface
++#endif  // interface
+ typedef struct LiteRtDispatchApi {
+   LiteRtApiVersion version;
+   LiteRtDispatchInterface* interface;
+diff --git a/litert/vendors/intel_openvino/compiler/CMakeLists.txt b/litert/vendors/intel_openvino/compiler/CMakeLists.txt
+new file mode 100644
+index 000000000..44108d4e4
+--- /dev/null
++++ b/litert/vendors/intel_openvino/compiler/CMakeLists.txt
+@@ -0,0 +1,87 @@
++# Copyright 2026 Google LLC.
++#
++# Licensed under the Apache License, Version 2.0 (the "License");
++# you may not use this file except in compliance with the License.
++# You may obtain a copy of the License at
++#
++#      http://www.apache.org/licenses/LICENSE-2.0
++#
++# Unless required by applicable law or agreed to in writing, software
++# distributed under the License is distributed on an "AS IS" BASIS,
++# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++# See the License for the specific language governing permissions and
++# limitations under the License.
++
++# Intel OpenVINO Compiler Plugin Shared Library
++cmake_minimum_required(VERSION 3.20)
++
++message(STATUS "Building Intel OpenVINO compiler plugin for host")
++
++add_library(intel_openvino_compiler_plugin SHARED
++    decoder.cc
++    graph_iterator.cc
++    npu_optimizer.cc
++    openvino_compile_context.cc
++    openvino_compiler_plugin.cc
++    openvino_soc_config.cc
++)
++
++target_link_libraries(intel_openvino_compiler_plugin
++    PRIVATE
++        litert_c_api
++        litert_cc_api
++        litert_cc_internal
++        tensorflow-lite
++        absl::status
++        absl::statusor
++        absl::strings
++        absl::str_format
++        flatbuffers::flatbuffers
++        openvino::runtime
++        openvino::frontend::tensorflow_lite
++)
++
++set_target_properties(intel_openvino_compiler_plugin PROPERTIES
++    OUTPUT_NAME "LiteRtCompilerPlugin_IntelOpenvino"
++)
++
++target_compile_definitions(intel_openvino_compiler_plugin
++    PRIVATE
++        LITERT_COMPILE_LIBRARY
++)
++
++if(MSVC)
++    target_compile_options(intel_openvino_compiler_plugin PRIVATE /wd4018)
++elseif(UNIX)
++    target_link_options(intel_openvino_compiler_plugin PRIVATE
++        "-Wl,-soname=libLiteRtCompilerPlugin_IntelOpenvino.so"
++    )
++endif()
++
++# NPU optimizer test (self-contained: only needs OpenVINO + litert logging, no
++# litert/test infra). Other intel_openvino tests (decoder_test,
++# graph_iterator_test, openvino_compiler_plugin_test) additionally depend on
++# litert/test:common, litert/test:matchers, litert/test:test_models, which are
++# not yet ported to this CMake build.
++if(NOT TARGET GTest::gtest)
++    include(FetchContent)
++    FetchContent_Declare(
++        googletest
++        GIT_REPOSITORY https://github.com/google/googletest.git
++        GIT_TAG v1.12.x
++    )
++    FetchContent_MakeAvailable(googletest)
++endif()
++
++add_executable(intel_openvino_npu_optimizer_test
++    npu_optimizer.cc
++    npu_optimizer_test.cc
++)
++
++target_link_libraries(intel_openvino_npu_optimizer_test
++    PRIVATE
++        litert_c_api
++        openvino::runtime
++        GTest::gtest
++        GTest::gtest_main
++)
+diff --git a/tflite/CMakeLists.txt b/tflite/CMakeLists.txt
+index a420bf6df..e5661cff4 100644
+--- a/tflite/CMakeLists.txt
++++ b/tflite/CMakeLists.txt
+@@ -128,10 +128,11 @@ if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
+   set(_TFLITE_ENABLE_NNAPI OFF)
+ endif()
+ set(_TFLITE_ENABLE_MMAP "${TFLITE_ENABLE_MMAP}")
+-# Note: file-backed mmap (mmap_allocation.cc) is now supported on Windows via
+-# CreateFileMapping/MapViewOfFile, so it is no longer force-disabled here.
+-# -DTFLITE_MMAP_DISABLED is still defined for Windows below; that macro only
+-# governs anonymous scratch mmap (e.g. fully_connected_4bit.h), not file mmap.
++# mmap_allocation.cc uses POSIX-only APIs (sys/mman.h, unistd.h) with no
++# Windows implementation, so fall back to mmap_allocation_disabled.cc there.
++if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
++  set(_TFLITE_ENABLE_MMAP OFF)
++endif()
+ # Simplifies inclusion of non-test sources and headers from a directory.
+ # SOURCE_DIR: Directory to search for files.
+ # SOURCES_VAR: Variable to append with all matching *.cc and *.h files.

@@ -383,6 +383,30 @@ if(APPLE)
         ${_litert_runtime_c_api_private_archives}
         ${_litert_runtime_c_api_public_deps})
   target_link_options(litert_runtime_c_api_shared_lib PRIVATE -Wl,-all_load)
+elseif(MSVC)
+  # MSVC's linker has no equivalent of GNU ld's -Wl,--whole-archive. The
+  # archives that must be fully retained in the shared lib (see comment on
+  # _litert_runtime_c_api_private_archives above) are force-included one by
+  # one via /WHOLEARCHIVE:<path> instead, which is what the other branches
+  # here achieve with a single --whole-archive/--no-whole-archive pair.
+  # This can't be done right here: at this point in the configure pass
+  # (add_subdirectory(c) runs before runtime/cc/cc/internal in the top-level
+  # CMakeLists.txt), most of _litert_runtime_c_api_private_archives aren't
+  # defined targets yet, so target_link_options would either error or (with
+  # an if(TARGET) guard) silently skip them. Instead this only sets up the
+  # plain link; see the LITERT_MSVC_WHOLE_ARCHIVE_LIBS block appended near
+  # the end of litert/CMakeLists.txt, after every subdirectory is added.
+  target_link_libraries(litert_runtime_c_api_shared_lib
+      PRIVATE
+        ${_litert_runtime_c_api_private_archives}
+        ${_litert_runtime_c_api_public_deps})
+  # litert_logging isn't in _litert_runtime_c_api_private_archives/public_deps
+  # (it reaches this link transitively, e.g. via litert_core_model), but its
+  # logger functions (LiteRtGetDefaultLogger etc.) are part of the public C
+  # API, so it needs the same forced whole-archive treatment on Windows --
+  # see generate_full_exports_def.cmake / the LITERT_MSVC_WHOLE_ARCHIVE_LIBS
+  # block for why that alone isn't enough without this.
+  set(LITERT_MSVC_WHOLE_ARCHIVE_LIBS ${_litert_runtime_c_api_private_archives} litert_logging PARENT_SCOPE)
 else()
   target_link_libraries(litert_runtime_c_api_shared_lib
       PRIVATE

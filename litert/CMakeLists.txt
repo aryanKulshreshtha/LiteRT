@@ -37,13 +37,20 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 # Suppress deprecation warnings (matching Bazel build behavior in .bazelrc)
 # The codebase has deprecated Error constructors that are still in use
-add_compile_options(
-  -Wno-deprecated-declarations
-  -Wno-nullability-completeness
-  -Wno-return-type
-  -fpermissive
-)
+if(NOT MSVC)
+  add_compile_options(
+    -Wno-deprecated-declarations
+    -Wno-nullability-completeness
+    -Wno-return-type
+    -fpermissive
+  )
+endif()
 add_compile_definitions(CL_TARGET_OPENCL_VERSION=300)
+if(MSVC)
+  # windows.h's min/max macros break FlatBuffers-generated accessors named
+  # min()/max() (e.g. tflite schema_generated.h) unless disabled globally.
+  add_compile_definitions(NOMINMAX)
+endif()
 
 # Cmake flattens the transitive public and interface link to emit the final link
 # command. Which will trigger a warning on Apple platforms (ld64 still dedups
@@ -270,6 +277,80 @@ endif()
 add_subdirectory(tools)
 add_subdirectory(experimental/custom_ops/gated_delta_net)
 
+
+# See the elseif(MSVC) branch in c/CMakeLists.txt: on Windows, litert_runtime,
+# litert_cc_internal, and tensorflow-lite aren't defined targets yet at the
+# point litert_runtime_c_api_shared_lib is declared, so their /WHOLEARCHIVE:
+# flags have to be applied here instead, now that every subdirectory above
+# has been processed.
+if(MSVC AND TARGET litert_runtime_c_api_shared_lib)
+  foreach(_litert_whole_archive_lib IN LISTS LITERT_MSVC_WHOLE_ARCHIVE_LIBS)
+    if(TARGET ${_litert_whole_archive_lib})
+      get_target_property(_litert_whole_archive_lib_type ${_litert_whole_archive_lib} TYPE)
+      if(_litert_whole_archive_lib_type STREQUAL "STATIC_LIBRARY")
+        target_link_options(litert_runtime_c_api_shared_lib PRIVATE
+            "/WHOLEARCHIVE:$<TARGET_FILE:${_litert_whole_archive_lib}>")
+      endif()
+    else()
+      message(WARNING "LITERT_MSVC_WHOLE_ARCHIVE_LIBS referenced unknown target: ${_litert_whole_archive_lib}")
+    endif()
+  endforeach()
+
+  # WINDOWS_EXPORT_ALL_SYMBOLS only scans a target's OWN object files, and
+  # litert_runtime_c_api_shared_lib's only own source is c/empty.cc -- the
+  # real C API lives in litert_c_api/litert_runtime/litert_cc_internal,
+  # which are merely whole-archived in above. Meanwhile, very little of the
+  # actual C API is annotated with LITERT_CAPI_EXPORT (__declspec(dllexport))
+  # in this source tree, so leaving MSVC to its own devices exports almost
+  # nothing. Work around both gaps by manually aggregating every .obj file
+  # from those three archives (deliberately excluding tensorflow-lite's own
+  # objects -- internal implementation, not public API) into one exports.def
+  # via CMake's own `-E __create_def` helper, then feeding that into the
+  # final link with /DEF:.
+  if(TARGET litert_c_api AND TARGET litert_runtime AND TARGET litert_cc_internal
+     AND TARGET litert_logging AND TARGET tensorflow-lite AND TARGET xnnpack-delegate)
+    get_target_property(_litert_c_api_bindir litert_c_api BINARY_DIR)
+    get_target_property(_litert_runtime_bindir litert_runtime BINARY_DIR)
+    get_target_property(_litert_cc_internal_bindir litert_cc_internal BINARY_DIR)
+    get_target_property(_litert_logging_bindir litert_logging BINARY_DIR)
+    get_target_property(_litert_tflite_bindir tensorflow-lite BINARY_DIR)
+    set(_litert_full_exports_objdirs
+        "${_litert_c_api_bindir}/CMakeFiles/litert_c_api.dir"
+        "${_litert_runtime_bindir}/CMakeFiles/litert_runtime.dir"
+        "${_litert_cc_internal_bindir}/CMakeFiles/litert_cc_internal.dir"
+        "${_litert_logging_bindir}/CMakeFiles/litert_logging.dir"
+        # tensorflow-lite and xnnpack-delegate themselves stay out of the
+        # whole-archive/export surface (internal implementation, not public
+        # API) -- they're only scanned here because a handful of TfLite* C
+        # functions (e.g. the XNNPACK delegate's default-options getter,
+        # defined in xnnpack-delegate not tensorflow-lite itself) are called
+        # directly by LiteRT's own default CPU accelerator setup and so must
+        # also be exported. generate_full_exports_def.cmake's keep-list
+        # filter still limits what actually survives from these two dirs.
+        "${_litert_tflite_bindir}/CMakeFiles/tensorflow-lite.dir"
+        "${_litert_tflite_bindir}/CMakeFiles/xnnpack-delegate.dir"
+    )
+    set(_litert_full_exports_def
+        "${CMAKE_CURRENT_BINARY_DIR}/c/CMakeFiles/litert_runtime_c_api_shared_lib.dir/full_exports.def")
+    add_custom_command(
+        OUTPUT "${_litert_full_exports_def}"
+        COMMAND "${CMAKE_COMMAND}"
+            "-DOBJDIRS=${_litert_full_exports_objdirs}"
+            "-DOUT_DEF=${_litert_full_exports_def}"
+            "-DOUT_OBJLIST=${_litert_full_exports_def}.objs"
+            "-DNM=${CMAKE_NM}"
+            "-DCMAKE_COMMAND_PATH=${CMAKE_COMMAND}"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/c/generate_full_exports_def.cmake"
+        DEPENDS litert_c_api litert_runtime litert_cc_internal litert_logging tensorflow-lite xnnpack-delegate
+                "${CMAKE_CURRENT_SOURCE_DIR}/c/generate_full_exports_def.cmake"
+        COMMENT "Generating full LiteRt C API exports.def (litert_c_api + litert_runtime + litert_cc_internal + litert_logging + selected tensorflow-lite symbols)"
+        VERBATIM
+    )
+    add_custom_target(litert_full_exports_def_target DEPENDS "${_litert_full_exports_def}")
+    add_dependencies(litert_runtime_c_api_shared_lib litert_full_exports_def_target)
+    target_link_options(litert_runtime_c_api_shared_lib PRIVATE "/DEF:${_litert_full_exports_def}")
+  endif()
+endif()
 
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../tensor/CMakeLists.txt")
   add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../tensor"

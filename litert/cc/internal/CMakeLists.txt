@@ -78,6 +78,10 @@ endif()
 add_library(litert_cc_internal STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../../c/empty.cc
 )
+# See litert_runtime's CMakeLists.txt: needed so exported symbols such as
+# kLiteRtRuntimeBuiltin (litert_runtime_api_export.h) get __declspec(dllexport)
+# instead of dllimport on Windows.
+target_compile_definitions(litert_cc_internal PRIVATE LITERT_COMPILE_LIBRARY)
 
 target_include_directories(litert_cc_internal
     PUBLIC

@@ -299,6 +299,12 @@ typedef struct LiteRtDispatchGraphInterface {
 ///
 /// @note This concrete type is shared between the runtime and the Dispatch
 ///     plugin, so it must be ABI stable.
+#ifdef interface
+// <windows.h> (pulled in transitively on Windows, e.g. for LoadLibrary) does
+// `#define interface struct` for COM authoring, which collides with the
+// `interface` field name below.
+#undef interface
+#endif  // interface
 typedef struct LiteRtDispatchApi {
   LiteRtAbiHeader abi_header;
   LiteRtApiVersion version;

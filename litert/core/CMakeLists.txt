@@ -56,7 +56,10 @@ target_link_libraries(litert_core
 )
 
 # Platform-specific source exclusions
-if(NOT WIN32)
+if(WIN32)
+    # Exclude POSIX (dlfcn.h) source
+    set_source_files_properties(dynamic_loading.cc PROPERTIES HEADER_FILE_ONLY TRUE)
+else()
     # Exclude Windows-specific source
     set_source_files_properties(dynamic_loading_windows.cc PROPERTIES HEADER_FILE_ONLY TRUE)
 endif()

@@ -101,10 +101,11 @@ if(NOT "${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
   set(_TFLITE_ENABLE_NNAPI OFF)
 endif()
 set(_TFLITE_ENABLE_MMAP "${TFLITE_ENABLE_MMAP}")
-# Note: file-backed mmap (mmap_allocation.cc) is now supported on Windows via
-# CreateFileMapping/MapViewOfFile, so it is no longer force-disabled here.
-# -DTFLITE_MMAP_DISABLED is still defined for Windows below; that macro only
-# governs anonymous scratch mmap (e.g. fully_connected_4bit.h), not file mmap.
+# mmap_allocation.cc uses POSIX-only APIs (sys/mman.h, unistd.h) with no
+# Windows implementation, so fall back to mmap_allocation_disabled.cc there.
+if(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+  set(_TFLITE_ENABLE_MMAP OFF)
+endif()
 # Simplifies inclusion of non-test sources and headers from a directory.
 # SOURCE_DIR: Directory to search for files.
 # SOURCES_VAR: Variable to append with all matching *.cc and *.h files.
@@ -248,7 +249,12 @@ if(CMAKE_SYSTEM_NAME MATCHES "Android")
 endif()
 # Build a list of source files to compile into the TF Lite library.
 populate_tflite_source_vars("." TFLITE_SRCS)
-if(CMAKE_SYSTEM_NAME MATCHES "Windows" AND BUILD_SHARED_LIBS)
+if(CMAKE_SYSTEM_NAME MATCHES "Windows")
+  # Excluded unconditionally on Windows (not just for BUILD_SHARED_LIBS): when
+  # tensorflow-lite is a static lib whole-archived into another DLL (e.g.
+  # LiteRT's runtime_c_api shared lib), the linker sees both this file and
+  # simple_memory_arena.cc's own DumpArenaInfo definition and fails with
+  # LNK2005 multiply-defined-symbol.
   list(FILTER TFLITE_SRCS EXCLUDE REGEX ".*simple_memory_arena_debug_dump\\.cc$")
 endif()
 

@@ -67,6 +67,11 @@ endif()
 
 # Runtime library
 add_library(litert_runtime STATIC ${LITERT_RUNTIME_SOURCES})
+# Most LiteRT C API functions are implemented here; LITERT_COMPILE_LIBRARY
+# makes their LITERT_CAPI_EXPORT annotations resolve to __declspec(dllexport)
+# on Windows instead of dllimport (see litert/c/litert_common.h), matching
+# the flag litert_c_api already gets.
+target_compile_definitions(litert_runtime PRIVATE LITERT_COMPILE_LIBRARY)
 
 set(LITERT_XNNPACK_INCLUDE_DIR "${CMAKE_BINARY_DIR}/xnnpack/include" CACHE PATH "Path to XNNPACK public headers used by LiteRT")
 set(LITERT_PTHREADPOOL_INCLUDE_DIR "${CMAKE_BINARY_DIR}/pthreadpool-source/include" CACHE PATH "Path to pthreadpool headers used by LiteRT")

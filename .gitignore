@@ -28,3 +28,5 @@ cmake_build/
 .vscode/
 *.whl
 /.litert_configure.bazelrc
+# Local Windows CMake build output
+litert/cmake_build_win/

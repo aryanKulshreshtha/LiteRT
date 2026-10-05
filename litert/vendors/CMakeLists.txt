@@ -24,7 +24,11 @@ set(NEUROPILOT_HEADERS_DIR "" CACHE PATH "Path to pre-downloaded NeuroPilot head
 set(QAIRT_HEADERS_DIR "" CACHE PATH "Path to pre-downloaded QAIRT/QNN headers (root containing Qnn*.h)")
 set(LITECORE_HEADERS_DIR "" CACHE PATH "Path to Samsung AI LiteCore headers (root containing graph_wrapper_api.h)")
 
-if(NOT NEUROPILOT_HEADERS_DIR)
+option(LITERT_FETCH_MEDIATEK_HEADERS "Auto-download MediaTek NeuroPilot headers if not already present" ON)
+option(LITERT_FETCH_QUALCOMM_HEADERS "Auto-download Qualcomm QAIRT headers if not already present" ON)
+option(LITERT_FETCH_SAMSUNG_HEADERS "Auto-download Samsung LiteCore headers if not already present" ON)
+
+if(LITERT_FETCH_MEDIATEK_HEADERS AND NOT NEUROPILOT_HEADERS_DIR)
   if(NOT NEUROPILOT_HEADERS_URL AND NOT NEUROPILOT_GIT_REPO)
     set(NEUROPILOT_HEADERS_URL "https://s3.ap-southeast-1.amazonaws.com/mediatek.neuropilot.com/66f2c33a-2005-4f0b-afef-2053c8654e4f.gz")
   endif()
@@ -62,7 +66,7 @@ if(NOT NEUROPILOT_HEADERS_DIR)
 endif()
 
 # LINT.IfChange(qairt_headers_dir)
-if(NOT QAIRT_HEADERS_DIR)
+if(LITERT_FETCH_QUALCOMM_HEADERS AND NOT QAIRT_HEADERS_DIR)
   if(NOT QAIRT_HEADERS_URL AND NOT QAIRT_GIT_REPO)
     set(QAIRT_HEADERS_URL "https://softwarecenter.qualcomm.com/api/download/software/sdks/Qualcomm_AI_Runtime_Community/All/2.50.0.260828/v2.50.0.260828.zip")
     set(QAIRT_HEADERS_SUBDIR "qairt/2.50.0.260828")
@@ -115,7 +119,7 @@ if(NOT LITECORE_HEADERS_DIR)
   endif()
 endif()
 
-if(NOT LITECORE_HEADERS_DIR)
+if(LITERT_FETCH_SAMSUNG_HEADERS AND NOT LITECORE_HEADERS_DIR)
   if(NOT LITECORE_HEADERS_URL AND NOT LITECORE_GIT_REPO)
     set(LITECORE_HEADERS_URL "https://soc-developer.semiconductor.samsung.com/api/v1/resource/download-file/1.1.0/ai-litecore-ubuntu2404-v1.1.0.tar.gz")
   endif()
@@ -255,6 +259,13 @@ function(_litert_add_dispatch_so VENDOR DIR OUTPUT_BASENAME)
     )
   endif()
 
+  if(VENDOR STREQUAL "OpenVINO")
+    list(APPEND DISPATCH_SRCS
+      "${CMAKE_CURRENT_SOURCE_DIR}/intel_openvino/dispatch/openvino_shared_core.cc"
+      "${CMAKE_CURRENT_SOURCE_DIR}/intel_openvino/dispatch/openvino_tensor_buffer.cc"
+    )
+  endif()
+
   set(TGT "dispatch_api_${VENDOR}_so")
   add_library(${TGT} SHARED ${DISPATCH_SRCS})
   if(VENDOR STREQUAL "MediaTek")
@@ -322,11 +333,13 @@ else()
   message(STATUS "Skipping MediaTek dispatch: neuron/api/NeuronAdapter.h not found")
 endif()
 # Intel OpenVINO
-check_include_file_cxx("openvino/openvino.hpp" HAVE_OPENVINO_HDR)
-if(HAVE_OPENVINO_HDR)
+find_package(OpenVINO QUIET)
+if(TARGET openvino::runtime)
   _litert_add_dispatch_so(OpenVINO "intel_openvino/dispatch" "OpenVINO")
+  target_link_libraries(dispatch_api_OpenVINO_so PRIVATE openvino::runtime)
+  add_subdirectory(intel_openvino/compiler)
 else()
-  message(STATUS "Skipping OpenVINO dispatch: openvino/openvino.hpp not found")
+  message(STATUS "Skipping OpenVINO dispatch: OpenVINO runtime package not found")
 endif()
 
 # Arm ML extensions for Vulkan
